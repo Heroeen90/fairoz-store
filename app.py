@@ -31,12 +31,12 @@ if not st.session_state.auth:
             st.session_state.auth = True
             st.rerun()
         else:
-            st.error("خطأ في PIN")
+            st.error("PIN غير صحيح ❌")
 
     st.stop()
 
 # =========================
-# LOAD DATA (مرة واحدة)
+# LOAD DATA
 # =========================
 @st.cache_data
 def load_data():
@@ -50,10 +50,15 @@ def load_data():
     )
 
 df = load_data()
-df["date"] = pd.to_datetime(df["date"])
+
+if df.empty:
+    df = pd.DataFrame(columns=["type","category","amount","description","date"])
+
+df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
 # =========================
-# TABS SYSTEM
+# TABS
 # =========================
 tab1, tab2, tab3, tab4 = st.tabs([
     "📊 لوحة التحكم",
@@ -68,41 +73,59 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.title("📊 لوحة التحكم")
 
-    sales = df[df["type"] == "مبيعات"]["amount"].sum()
-    purchases = df[df["type"] == "مشتريات"]["amount"].sum()
-    expenses = df[df["type"] == "مصروف"]["amount"].sum()
-    loans = df[df["type"] == "سلفة عامل"]["amount"].sum()
-    salary = df[df["type"] == "راتب عامل"]["amount"].sum()
-    owner = df[df["type"] == "سحب تحسين"]["amount"].sum()
+    def sum_type(t):
+        return df[df["type"] == t]["amount"].sum()
+
+    sales = sum_type("مبيعات")
+    purchases = sum_type("مشتريات")
+    expenses = sum_type("مصروف")
+    loans = sum_type("سلفة عامل")
+    salary = sum_type("راتب عامل")
+    owner = sum_type("سحب تحسين")
 
     total_exp = purchases + expenses + loans + salary + owner
     profit = sales - total_exp
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("💰 مبيعات", f"{sales:,}")
-    c2.metric("💸 مصروفات", f"{total_exp:,}")
-    c3.metric("📈 ربح", f"{profit:,}")
+    c1.metric("💰 مبيعات", f"{sales:,.0f}")
+    c2.metric("💸 مصروفات", f"{total_exp:,.0f}")
+    c3.metric("📈 ربح", f"{profit:,.0f}")
 
     st.divider()
 
     st.subheader("📌 أين ذهبت الأموال؟")
 
-    st.bar_chart({
-        "مشتريات": [purchases],
-        "مصروفات": [expenses],
-        "رواتب": [salary],
-        "سلف": [loans],
-        "سحب": [owner]
-    })
+    chart_data = {
+        "مشتريات": float(purchases or 0),
+        "مصروفات": float(expenses or 0),
+        "رواتب": float(salary or 0),
+        "سلف": float(loans or 0),
+        "سحب": float(owner or 0)
+    }
 
-    # 🔥 Insights
+    st.bar_chart(chart_data)
+
+    # =========================
+    # 🧠 FIXED SMART ANALYTICS
+    # =========================
     st.subheader("🧠 تحليل ذكي")
 
     if not df.empty:
-        biggest_expense = df.groupby("type")["amount"].sum().sort_values(ascending=False)
 
-        st.write("📌 أعلى نوع صرف:")
-        st.write(biggest_expense.head(3))
+        analysis = (
+            df.groupby("type")["amount"]
+            .sum()
+            .fillna(0)
+            .sort_values(ascending=False)
+            .reset_index()
+        )
+
+        analysis.columns = ["نوع العملية", "المجموع"]
+
+        st.dataframe(analysis)
+
+    else:
+        st.info("لا توجد بيانات بعد")
 
 # =========================
 # ➕ ADD
@@ -142,7 +165,8 @@ with tab2:
         """,(op,cat,amount,desc,datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
         conn.commit()
-        st.success("تم الحفظ")
+        st.cache_data.clear()
+        st.success("تم الحفظ ✅")
         st.rerun()
 
 # =========================
@@ -156,23 +180,30 @@ with tab3:
     now = datetime.now()
 
     if filter_type == "اليوم":
-        f = df[df["date"].dt.date == now.date()]
+        filtered = df[df["date"].dt.date == now.date()]
 
     elif filter_type == "آخر 7 أيام":
-        f = df[df["date"] >= now - timedelta(days=7)]
+        filtered = df[df["date"] >= now - timedelta(days=7)]
 
     else:
-        f = df[df["date"].dt.month == now.month]
+        filtered = df[df["date"].dt.month == now.month]
 
-    st.dataframe(f)
+    st.dataframe(filtered)
 
     st.subheader("📊 تحليل")
-    st.write(f.groupby("type")["amount"].sum())
 
-    # export
+    if not filtered.empty:
+        st.write(
+            filtered.groupby("type")["amount"]
+            .sum()
+            .fillna(0)
+        )
+    else:
+        st.info("لا توجد بيانات")
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        f.to_excel(writer, index=False)
+        filtered.to_excel(writer, index=False)
 
     st.download_button("📤 Excel", output.getvalue(), "report.xlsx")
 
@@ -187,6 +218,8 @@ with tab4:
     filtered = df.copy()
 
     if search:
-        filtered = df[df.astype(str).apply(lambda x: x.str.contains(search)).any(axis=1)]
+        filtered = df[df.astype(str).apply(
+            lambda x: x.str.contains(search, case=False, na=False)
+        ).any(axis=1)]
 
     st.dataframe(filtered.head(50))
