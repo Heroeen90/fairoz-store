@@ -2,125 +2,152 @@ import streamlit as st
 from datetime import datetime
 from database import init_db, get_connection
 import pandas as pd
+import io
 
 # =========================
-# 🧱 تهيئة النظام
+# 🧱 INIT
 # =========================
 init_db()
 
 st.set_page_config(page_title="محل فيروز", layout="wide")
 
-st.title("🛒 نظام إدارة محل فيروز")
-st.subheader("بإدارة الحاج تحسين عبد ديوان")
-
 conn = get_connection()
 cursor = conn.cursor()
 
 # =========================
-# 📦 جلب البيانات
+# 🔐 LOGIN SYSTEM (PIN)
 # =========================
-def get_all_transactions():
+PIN = "1234"
+
+if "auth" not in st.session_state:
+    st.session_state.auth = False
+
+if not st.session_state.auth:
+    st.title("🔐 تسجيل الدخول")
+
+    pin_input = st.text_input("أدخل PIN", type="password")
+
+    if st.button("دخول"):
+        if pin_input == PIN:
+            st.session_state.auth = True
+            st.rerun()
+        else:
+            st.error("PIN خطأ ❌")
+
+    st.stop()
+
+# =========================
+# 🏪 HEADER
+# =========================
+st.title("🛒 محل فيروز")
+st.subheader("بإدارة الحاج تحسين عبد ديوان")
+
+# =========================
+# 📦 LOAD DATA
+# =========================
+def load_data():
     cursor.execute("""
-        SELECT type, amount, date, category, description
+        SELECT type, category, amount, description, date
         FROM transactions
-        ORDER BY date DESC
+        ORDER BY id DESC
     """)
     return cursor.fetchall()
 
-def get_sum_by_type(op_type):
-    cursor.execute("SELECT SUM(amount) FROM transactions WHERE type=?", (op_type,))
-    res = cursor.fetchone()[0]
-    return res if res else 0
-
-def get_sum_in_list(types):
-    cursor.execute(
-        f"SELECT SUM(amount) FROM transactions WHERE type IN ({','.join(['?']*len(types))})",
-        types
-    )
-    res = cursor.fetchone()[0]
-    return res if res else 0
+data = load_data()
+df = pd.DataFrame(data, columns=["type","category","amount","description","date"])
+df["date"] = pd.to_datetime(df["date"])
 
 # =========================
-# 📊 لوحة التحكم
+# 📊 DASHBOARD
 # =========================
 st.divider()
 st.subheader("📊 لوحة التحكم")
 
-sales = get_sum_by_type("مبيعات")
-expenses = get_sum_in_list(["مشتريات","مصروف","سلفة عامل","راتب عامل","سحب تحسين"])
+def sum_type(t):
+    return df[df["type"] == t]["amount"].sum()
 
-profit = sales - expenses
+sales = sum_type("مبيعات")
+purchases = sum_type("مشتريات")
+expenses = sum_type("مصروف")
+loans = sum_type("سلفة عامل")
+salary = sum_type("راتب عامل")
+owner = sum_type("سحب تحسين")
+
+total_exp = purchases + expenses + loans + salary + owner
+profit = sales - total_exp
 
 c1, c2, c3 = st.columns(3)
-c1.metric("💰 المبيعات", f"{sales:,} IQD")
-c2.metric("💸 المصروفات", f"{expenses:,} IQD")
-c3.metric("📈 الربح", f"{profit:,} IQD")
+c1.metric("💰 مبيعات", f"{sales:,} IQD")
+c2.metric("💸 مصروفات", f"{total_exp:,} IQD")
+c3.metric("📈 ربح", f"{profit:,} IQD")
 
 st.divider()
 
 # =========================
-# 📅 فلترة شهرية
+# 📌 WHERE MONEY WENT
 # =========================
-st.subheader("📅 التقارير الشهرية")
+st.subheader("📌 أين ذهبت الأموال؟")
 
-all_data = get_all_transactions()
+st.write({
+    "مشتريات": purchases,
+    "مصروفات": expenses,
+    "رواتب": salary,
+    "سلف": loans,
+    "سحب تحسين": owner
+})
 
-df = pd.DataFrame(all_data, columns=["type","amount","date","category","description"])
+st.divider()
 
-df["date"] = pd.to_datetime(df["date"])
+# =========================
+# 📅 FILTER
+# =========================
+st.subheader("📅 التقارير")
 
-month = st.selectbox("اختر الشهر", sorted(df["date"].dt.month.unique()))
-
-year = st.selectbox("اختر السنة", sorted(df["date"].dt.year.unique()))
+month = st.selectbox("الشهر", sorted(df["date"].dt.month.unique()))
+year = st.selectbox("السنة", sorted(df["date"].dt.year.unique()))
 
 filtered = df[(df["date"].dt.month == month) & (df["date"].dt.year == year)]
 
-st.write("عدد العمليات:", len(filtered))
-
 st.dataframe(filtered)
-
-# =========================
-# 📌 تحليل الشهر
-# =========================
-st.subheader("📌 تحليل الشهر")
-
-sales_m = filtered[filtered["type"] == "مبيعات"]["amount"].sum()
-purchases_m = filtered[filtered["type"] == "مشتريات"]["amount"].sum()
-expenses_m = filtered[filtered["type"] == "مصروف"]["amount"].sum()
-loans_m = filtered[filtered["type"] == "سلفة عامل"]["amount"].sum()
-salary_m = filtered[filtered["type"] == "راتب عامل"]["amount"].sum()
-owner_m = filtered[filtered["type"] == "سحب تحسين"]["amount"].sum()
-
-total_exp = purchases_m + expenses_m + loans_m + salary_m + owner_m
-profit_m = sales_m - total_exp
-
-col1, col2, col3 = st.columns(3)
-col1.metric("💰 مبيعات الشهر", f"{sales_m:,}")
-col2.metric("💸 مصروفات الشهر", f"{total_exp:,}")
-col3.metric("📈 صافي الشهر", f"{profit_m:,}")
 
 st.divider()
 
 # =========================
-# 📌 أين ذهبت الأموال؟
+# 📤 EXPORT EXCEL
 # =========================
-st.subheader("📌 أين ذهبت أموال الشهر؟")
+st.subheader("📤 تصدير البيانات")
 
-st.write({
-    "مشتريات": purchases_m,
-    "مصروفات": expenses_m,
-    "رواتب": salary_m,
-    "سلف": loans_m,
-    "سحب تحسين": owner_m
-})
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    filtered.to_excel(writer, index=False)
+
+st.download_button(
+    "⬇️ تحميل Excel",
+    data=output.getvalue(),
+    file_name="fairoz_report.xlsx"
+)
 
 # =========================
-# ➕ إدخال العمليات
+# 💾 BACKUP
 # =========================
-st.sidebar.title("➕ إضافة عملية")
+st.subheader("💾 النسخ الاحتياطي")
+
+backup_data = df.to_csv(index=False).encode('utf-8')
+
+st.download_button(
+    "⬇️ تحميل Backup CSV",
+    data=backup_data,
+    file_name="fairoz_backup.csv",
+    mime="text/csv"
+)
+
+# =========================
+# ➕ QUICK ADD (MOBILE FRIENDLY)
+# =========================
+st.sidebar.title("⚡ إضافة سريعة")
 
 op = st.sidebar.selectbox(
-    "نوع العملية",
+    "العملية",
     ["مبيعات","مشتريات","مصروف","سلفة عامل","راتب عامل","سحب تحسين"]
 )
 
@@ -133,11 +160,10 @@ if op == "مشتريات":
     cat = st.sidebar.text_input("تفاصيل")
 
 elif op == "مصروف":
-    cat = st.sidebar.selectbox("نوع المصروف",["كهرباء","صيانة","نقليات","معدات","أخرى"])
-    desc = st.sidebar.text_input("ملاحظة")
+    cat = st.sidebar.selectbox("نوع",["كهرباء","صيانة","نقليات","معدات","أخرى"])
 
 elif op in ["سلفة عامل","راتب عامل"]:
-    cat = st.sidebar.selectbox("العامل",["مصطفى","حسين","عمار","كرار"])
+    cat = st.sidebar.selectbox("عامل",["مصطفى","حسين","عمار","كرار"])
 
 elif op == "سحب تحسين":
     desc = st.sidebar.text_input("ملاحظة")
@@ -147,21 +173,19 @@ elif op == "مبيعات":
 
 if st.sidebar.button("💾 حفظ"):
 
-    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     cursor.execute("""
         INSERT INTO transactions(type,category,amount,description,date)
-        VALUES(?,?,?,?,?)
-    """,(op,cat,amount,desc,date))
+        VALUES (?,?,?,?,?)
+    """,(op,cat,amount,desc,datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
     conn.commit()
     st.success("تم الحفظ ✅")
     st.rerun()
 
 # =========================
-# 📋 السجل
+# 📋 LOG
 # =========================
 st.divider()
 st.subheader("📋 آخر العمليات")
 
-st.dataframe(df.head(20))
+st.dataframe(df.head(25))
