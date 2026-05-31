@@ -16,86 +16,88 @@ conn = get_connection()
 cursor = conn.cursor()
 
 # =========================
-# 📊 دوال الحسابات العامة
+# 📊 الدوال الأساسية
 # =========================
 def get_sum_by_type(op_type):
+    cursor.execute("SELECT SUM(amount) FROM transactions WHERE type=?", (op_type,))
+    result = cursor.fetchone()[0]
+    return result if result else 0
+
+
+def get_total_by_types(types):
     cursor.execute(
-        "SELECT SUM(amount) FROM transactions WHERE type=?",
-        (op_type,)
+        f"SELECT SUM(amount) FROM transactions WHERE type IN ({','.join(['?']*len(types))})",
+        types
     )
     result = cursor.fetchone()[0]
     return result if result else 0
 
 
-def get_total_sales():
-    return get_sum_by_type("مبيعات")
-
-
-def get_total_expenses():
+def get_monthly_data():
     cursor.execute("""
-        SELECT SUM(amount) FROM transactions 
-        WHERE type IN ('مشتريات','مصروف','سلفة عامل','راتب عامل','سحب تحسين')
+        SELECT type, amount, date, category, description
+        FROM transactions
+        ORDER BY date DESC
     """)
-    result = cursor.fetchone()[0]
-    return result if result else 0
+    return cursor.fetchall()
 
 
 # =========================
-# 👤 دوال العمال
-# =========================
-def get_employee_balance(name):
-    cursor.execute("""
-        SELECT type, amount FROM transactions
-        WHERE category=?
-    """, (name,))
-    
-    rows = cursor.fetchall()
-
-    loans = 0
-    salaries = 0
-
-    for r in rows:
-        if r[0] == "سلفة عامل":
-            loans += r[1]
-        elif r[0] == "راتب عامل":
-            salaries += r[1]
-
-    return salaries - loans
-
-
-# =========================
-# 📊 لوحة التحكم
+# 📊 لوحة التحكم الرئيسية
 # =========================
 st.divider()
 st.subheader("📊 لوحة التحكم المالية")
 
-sales = get_total_sales()
-expenses = get_total_expenses()
+sales = get_sum_by_type("مبيعات")
+
+expenses = get_total_by_types([
+    "مشتريات", "مصروف", "سلفة عامل", "راتب عامل", "سحب تحسين"
+])
+
 profit = sales - expenses
 
 col1, col2, col3 = st.columns(3)
 
 col1.metric("💰 المبيعات", f"{sales:,} IQD")
 col2.metric("💸 المصروفات", f"{expenses:,} IQD")
-col3.metric("📈 الربح", f"{profit:,} IQD")
+col3.metric("📈 صافي الربح", f"{profit:,} IQD")
 
 st.divider()
 
 # =========================
-# ➕ إضافة العمليات
+# 📌 أين ذهبت الأموال؟
+# =========================
+st.subheader("📌 أين ذهبت الأموال؟")
+
+cat_sales = get_sum_by_type("مبيعات")
+cat_purchases = get_sum_by_type("مشتريات")
+cat_expenses = get_sum_by_type("مصروف")
+cat_loans = get_sum_by_type("سلفة عامل")
+cat_salaries = get_sum_by_type("راتب عامل")
+cat_owner = get_sum_by_type("سحب تحسين")
+
+col1, col2, col3 = st.columns(3)
+
+col1.metric("🛒 مبيعات", f"{cat_sales:,}")
+col2.metric("📦 مشتريات", f"{cat_purchases:,}")
+col3.metric("⚙️ مصروفات", f"{cat_expenses:,}")
+
+col1, col2, col3 = st.columns(3)
+
+col1.metric("👤 رواتب", f"{cat_salaries:,}")
+col2.metric("💳 سلف", f"{cat_loans:,}")
+col3.metric("🏠 سحب تحسين", f"{cat_owner:,}")
+
+st.divider()
+
+# =========================
+# ➕ إدخال العمليات
 # =========================
 st.sidebar.title("➕ إضافة عملية")
 
 operation_type = st.sidebar.selectbox(
     "نوع العملية",
-    [
-        "مبيعات",
-        "مشتريات",
-        "مصروف",
-        "سلفة عامل",
-        "راتب عامل",
-        "سحب تحسين"
-    ]
+    ["مبيعات", "مشتريات", "مصروف", "سلفة عامل", "راتب عامل", "سحب تحسين"]
 )
 
 amount = st.sidebar.number_input("المبلغ", min_value=0)
@@ -125,9 +127,6 @@ elif operation_type == "سحب تحسين":
 elif operation_type == "مبيعات":
     description = st.sidebar.text_input("ملاحظة")
 
-# =========================
-# 💾 حفظ العملية
-# =========================
 if st.sidebar.button("💾 حفظ العملية"):
 
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -149,38 +148,18 @@ if st.sidebar.button("💾 حفظ العملية"):
     st.rerun()
 
 # =========================
-# 👤 لوحة العمال
-# =========================
-st.divider()
-st.subheader("👤 كشف العمال")
-
-employees = ["مصطفى", "حسين", "عمار", "كرار"]
-
-for emp in employees:
-    balance = get_employee_balance(emp)
-
-    st.write(f"👤 {emp} → الرصيد: {balance:,} IQD")
-
-# =========================
-# 📋 آخر العمليات
+# 📋 سجل العمليات
 # =========================
 st.divider()
 st.subheader("📋 آخر العمليات")
 
-cursor.execute("""
-    SELECT type, category, amount, description, date
-    FROM transactions
-    ORDER BY id DESC
-    LIMIT 15
-""")
+rows = get_monthly_data()[:20]
 
-rows = cursor.fetchall()
-
-for row in rows:
+for r in rows:
     st.write({
-        "النوع": row[0],
-        "الشخص/التصنيف": row[1],
-        "المبلغ": row[2],
-        "الملاحظة": row[3],
-        "التاريخ": row[4],
+        "النوع": r[0],
+        "المبلغ": r[1],
+        "التاريخ": r[2],
+        "الشخص/التصنيف": r[3],
+        "الملاحظة": r[4],
     })
