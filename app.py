@@ -1,6 +1,7 @@
 import streamlit as st
 from datetime import datetime
 from database import init_db, get_connection
+import pandas as pd
 
 # =========================
 # 🧱 تهيئة النظام
@@ -16,24 +17,9 @@ conn = get_connection()
 cursor = conn.cursor()
 
 # =========================
-# 📊 الدوال الأساسية
+# 📦 جلب البيانات
 # =========================
-def get_sum_by_type(op_type):
-    cursor.execute("SELECT SUM(amount) FROM transactions WHERE type=?", (op_type,))
-    result = cursor.fetchone()[0]
-    return result if result else 0
-
-
-def get_total_by_types(types):
-    cursor.execute(
-        f"SELECT SUM(amount) FROM transactions WHERE type IN ({','.join(['?']*len(types))})",
-        types
-    )
-    result = cursor.fetchone()[0]
-    return result if result else 0
-
-
-def get_monthly_data():
+def get_all_transactions():
     cursor.execute("""
         SELECT type, amount, date, category, description
         FROM transactions
@@ -41,125 +27,141 @@ def get_monthly_data():
     """)
     return cursor.fetchall()
 
+def get_sum_by_type(op_type):
+    cursor.execute("SELECT SUM(amount) FROM transactions WHERE type=?", (op_type,))
+    res = cursor.fetchone()[0]
+    return res if res else 0
+
+def get_sum_in_list(types):
+    cursor.execute(
+        f"SELECT SUM(amount) FROM transactions WHERE type IN ({','.join(['?']*len(types))})",
+        types
+    )
+    res = cursor.fetchone()[0]
+    return res if res else 0
 
 # =========================
-# 📊 لوحة التحكم الرئيسية
+# 📊 لوحة التحكم
 # =========================
 st.divider()
-st.subheader("📊 لوحة التحكم المالية")
+st.subheader("📊 لوحة التحكم")
 
 sales = get_sum_by_type("مبيعات")
-
-expenses = get_total_by_types([
-    "مشتريات", "مصروف", "سلفة عامل", "راتب عامل", "سحب تحسين"
-])
+expenses = get_sum_in_list(["مشتريات","مصروف","سلفة عامل","راتب عامل","سحب تحسين"])
 
 profit = sales - expenses
 
-col1, col2, col3 = st.columns(3)
+c1, c2, c3 = st.columns(3)
+c1.metric("💰 المبيعات", f"{sales:,} IQD")
+c2.metric("💸 المصروفات", f"{expenses:,} IQD")
+c3.metric("📈 الربح", f"{profit:,} IQD")
 
-col1.metric("💰 المبيعات", f"{sales:,} IQD")
-col2.metric("💸 المصروفات", f"{expenses:,} IQD")
-col3.metric("📈 صافي الربح", f"{profit:,} IQD")
+st.divider()
+
+# =========================
+# 📅 فلترة شهرية
+# =========================
+st.subheader("📅 التقارير الشهرية")
+
+all_data = get_all_transactions()
+
+df = pd.DataFrame(all_data, columns=["type","amount","date","category","description"])
+
+df["date"] = pd.to_datetime(df["date"])
+
+month = st.selectbox("اختر الشهر", sorted(df["date"].dt.month.unique()))
+
+year = st.selectbox("اختر السنة", sorted(df["date"].dt.year.unique()))
+
+filtered = df[(df["date"].dt.month == month) & (df["date"].dt.year == year)]
+
+st.write("عدد العمليات:", len(filtered))
+
+st.dataframe(filtered)
+
+# =========================
+# 📌 تحليل الشهر
+# =========================
+st.subheader("📌 تحليل الشهر")
+
+sales_m = filtered[filtered["type"] == "مبيعات"]["amount"].sum()
+purchases_m = filtered[filtered["type"] == "مشتريات"]["amount"].sum()
+expenses_m = filtered[filtered["type"] == "مصروف"]["amount"].sum()
+loans_m = filtered[filtered["type"] == "سلفة عامل"]["amount"].sum()
+salary_m = filtered[filtered["type"] == "راتب عامل"]["amount"].sum()
+owner_m = filtered[filtered["type"] == "سحب تحسين"]["amount"].sum()
+
+total_exp = purchases_m + expenses_m + loans_m + salary_m + owner_m
+profit_m = sales_m - total_exp
+
+col1, col2, col3 = st.columns(3)
+col1.metric("💰 مبيعات الشهر", f"{sales_m:,}")
+col2.metric("💸 مصروفات الشهر", f"{total_exp:,}")
+col3.metric("📈 صافي الشهر", f"{profit_m:,}")
 
 st.divider()
 
 # =========================
 # 📌 أين ذهبت الأموال؟
 # =========================
-st.subheader("📌 أين ذهبت الأموال؟")
+st.subheader("📌 أين ذهبت أموال الشهر؟")
 
-cat_sales = get_sum_by_type("مبيعات")
-cat_purchases = get_sum_by_type("مشتريات")
-cat_expenses = get_sum_by_type("مصروف")
-cat_loans = get_sum_by_type("سلفة عامل")
-cat_salaries = get_sum_by_type("راتب عامل")
-cat_owner = get_sum_by_type("سحب تحسين")
-
-col1, col2, col3 = st.columns(3)
-
-col1.metric("🛒 مبيعات", f"{cat_sales:,}")
-col2.metric("📦 مشتريات", f"{cat_purchases:,}")
-col3.metric("⚙️ مصروفات", f"{cat_expenses:,}")
-
-col1, col2, col3 = st.columns(3)
-
-col1.metric("👤 رواتب", f"{cat_salaries:,}")
-col2.metric("💳 سلف", f"{cat_loans:,}")
-col3.metric("🏠 سحب تحسين", f"{cat_owner:,}")
-
-st.divider()
+st.write({
+    "مشتريات": purchases_m,
+    "مصروفات": expenses_m,
+    "رواتب": salary_m,
+    "سلف": loans_m,
+    "سحب تحسين": owner_m
+})
 
 # =========================
 # ➕ إدخال العمليات
 # =========================
 st.sidebar.title("➕ إضافة عملية")
 
-operation_type = st.sidebar.selectbox(
+op = st.sidebar.selectbox(
     "نوع العملية",
-    ["مبيعات", "مشتريات", "مصروف", "سلفة عامل", "راتب عامل", "سحب تحسين"]
+    ["مبيعات","مشتريات","مصروف","سلفة عامل","راتب عامل","سحب تحسين"]
 )
 
 amount = st.sidebar.number_input("المبلغ", min_value=0)
 
-category = ""
-description = ""
+cat = ""
+desc = ""
 
-if operation_type == "مشتريات":
-    category = st.sidebar.text_input("تفاصيل المشتريات")
+if op == "مشتريات":
+    cat = st.sidebar.text_input("تفاصيل")
 
-elif operation_type == "مصروف":
-    category = st.sidebar.selectbox(
-        "نوع المصروف",
-        ["كهرباء", "صيانة", "نقليات", "معدات", "أخرى"]
-    )
-    description = st.sidebar.text_input("ملاحظة")
+elif op == "مصروف":
+    cat = st.sidebar.selectbox("نوع المصروف",["كهرباء","صيانة","نقليات","معدات","أخرى"])
+    desc = st.sidebar.text_input("ملاحظة")
 
-elif operation_type in ["سلفة عامل", "راتب عامل"]:
-    category = st.sidebar.selectbox(
-        "اسم العامل",
-        ["مصطفى", "حسين", "عمار", "كرار"]
-    )
+elif op in ["سلفة عامل","راتب عامل"]:
+    cat = st.sidebar.selectbox("العامل",["مصطفى","حسين","عمار","كرار"])
 
-elif operation_type == "سحب تحسين":
-    description = st.sidebar.text_input("ملاحظة")
+elif op == "سحب تحسين":
+    desc = st.sidebar.text_input("ملاحظة")
 
-elif operation_type == "مبيعات":
-    description = st.sidebar.text_input("ملاحظة")
+elif op == "مبيعات":
+    desc = st.sidebar.text_input("ملاحظة")
 
-if st.sidebar.button("💾 حفظ العملية"):
+if st.sidebar.button("💾 حفظ"):
 
     date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     cursor.execute("""
-        INSERT INTO transactions (type, category, amount, description, date)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        operation_type,
-        category,
-        amount,
-        description,
-        date
-    ))
+        INSERT INTO transactions(type,category,amount,description,date)
+        VALUES(?,?,?,?,?)
+    """,(op,cat,amount,desc,date))
 
     conn.commit()
-
-    st.success("تم الحفظ بنجاح ✅")
+    st.success("تم الحفظ ✅")
     st.rerun()
 
 # =========================
-# 📋 سجل العمليات
+# 📋 السجل
 # =========================
 st.divider()
 st.subheader("📋 آخر العمليات")
 
-rows = get_monthly_data()[:20]
-
-for r in rows:
-    st.write({
-        "النوع": r[0],
-        "المبلغ": r[1],
-        "التاريخ": r[2],
-        "الشخص/التصنيف": r[3],
-        "الملاحظة": r[4],
-    })
+st.dataframe(df.head(20))
