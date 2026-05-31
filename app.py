@@ -16,7 +16,7 @@ conn = get_connection()
 cursor = conn.cursor()
 
 # =========================
-# 📊 دوال الحسابات
+# 📊 دوال الحسابات العامة
 # =========================
 def get_sum_by_type(op_type):
     cursor.execute(
@@ -34,14 +34,37 @@ def get_total_sales():
 def get_total_expenses():
     cursor.execute("""
         SELECT SUM(amount) FROM transactions 
-        WHERE type IN ('مشتريات', 'مصروف', 'سلفة عامل', 'راتب عامل', 'سحب تحسين')
+        WHERE type IN ('مشتريات','مصروف','سلفة عامل','راتب عامل','سحب تحسين')
     """)
     result = cursor.fetchone()[0]
     return result if result else 0
 
 
 # =========================
-# 📊 لوحة التحكم المالية
+# 👤 دوال العمال
+# =========================
+def get_employee_balance(name):
+    cursor.execute("""
+        SELECT type, amount FROM transactions
+        WHERE category=?
+    """, (name,))
+    
+    rows = cursor.fetchall()
+
+    loans = 0
+    salaries = 0
+
+    for r in rows:
+        if r[0] == "سلفة عامل":
+            loans += r[1]
+        elif r[0] == "راتب عامل":
+            salaries += r[1]
+
+    return salaries - loans
+
+
+# =========================
+# 📊 لوحة التحكم
 # =========================
 st.divider()
 st.subheader("📊 لوحة التحكم المالية")
@@ -52,9 +75,9 @@ profit = sales - expenses
 
 col1, col2, col3 = st.columns(3)
 
-col1.metric("💰 إجمالي المبيعات", f"{sales:,} IQD")
-col2.metric("💸 إجمالي المصروفات", f"{expenses:,} IQD")
-col3.metric("📈 صافي الربح", f"{profit:,} IQD")
+col1.metric("💰 المبيعات", f"{sales:,} IQD")
+col2.metric("💸 المصروفات", f"{expenses:,} IQD")
+col3.metric("📈 الربح", f"{profit:,} IQD")
 
 st.divider()
 
@@ -91,7 +114,10 @@ elif operation_type == "مصروف":
     description = st.sidebar.text_input("ملاحظة")
 
 elif operation_type in ["سلفة عامل", "راتب عامل"]:
-    category = st.sidebar.text_input("اسم العامل")
+    category = st.sidebar.selectbox(
+        "اسم العامل",
+        ["مصطفى", "حسين", "عمار", "كرار"]
+    )
 
 elif operation_type == "سحب تحسين":
     description = st.sidebar.text_input("ملاحظة")
@@ -119,8 +145,21 @@ if st.sidebar.button("💾 حفظ العملية"):
 
     conn.commit()
 
-    st.success("تم حفظ العملية بنجاح ✅")
+    st.success("تم الحفظ بنجاح ✅")
     st.rerun()
+
+# =========================
+# 👤 لوحة العمال
+# =========================
+st.divider()
+st.subheader("👤 كشف العمال")
+
+employees = ["مصطفى", "حسين", "عمار", "كرار"]
+
+for emp in employees:
+    balance = get_employee_balance(emp)
+
+    st.write(f"👤 {emp} → الرصيد: {balance:,} IQD")
 
 # =========================
 # 📋 آخر العمليات
@@ -140,7 +179,7 @@ rows = cursor.fetchall()
 for row in rows:
     st.write({
         "النوع": row[0],
-        "التصنيف": row[1],
+        "الشخص/التصنيف": row[1],
         "المبلغ": row[2],
         "الملاحظة": row[3],
         "التاريخ": row[4],
